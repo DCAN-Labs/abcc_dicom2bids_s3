@@ -20,6 +20,8 @@ prog_descrip='AWS downloader'
 QC_CSV = os.path.join(os.path.dirname(os.path.dirname(
                     os.path.abspath(__file__))), "spreadsheets",
                     "abcd_fastqc01_reformatted.csv") 
+TMP_DIR = os.path.join(os.path.dirname(os.path.dirname(
+                    os.path.abspath(__file__))), "temp") 
 YEARS = ['baseline_year_1_arm_1', '2_year_follow_up_y_arm_1',  '00A', '02A', '04A', '06A', '08A']
 MODALITIES = ['anat', 'func', 'dwi']
 
@@ -71,6 +73,11 @@ def generate_parser(parser=None):
         dest='s3_bucket',
         default='s3://midb-abcd-ucsd-main-pr-upload/release/bids/sourcedata',
         help="UCSD S3 Bucket . Default: s3://midb-abcd-ucsd-main-pr-upload/release/bids/sourcedata"
+)
+    parser.add_argument(
+        '--s3-config',
+        dest='s3_config',
+        help="config file with S3 Bucket Credentials"
 )
 
     return parser
@@ -132,19 +139,6 @@ def main(argv=sys.argv):
             subject_df = series_df[series_df['pGUID'] == bids_id]
             for bids_year in year_list:
                 year = 'ses-' + ''.join(bids_year)
-                # if bids_year == '06A':
-                #     year='6_year_follow_up_y_arm_1'
-                # elif bids_year == '00A':
-                #     year='baseline_year_1_arm_1'
-                # elif bids_year == '02A':
-                #     year='2_year_follow_up_y_arm_1'
-                # elif bids_year == '04A':
-                #     year='4_year_follow_up_y_arm_1'
-                # elif bids_year == '08A':
-                #     year='8_year_follow_up_y_arm_1'
-                # else:
-                #     print("Wrong choice of session")
-                #     sys.exit(1)
                 sub_ses_df = subject_df[subject_df['EventName'] == year]
                 sub_pass_QC_df = sub_ses_df[sub_ses_df['usable'] != 0.0] #changed this line back to be able to filter based on QC from fast track
                 file_paths = []
@@ -193,7 +187,7 @@ def main(argv=sys.argv):
                     num_dti += 1
 
                 
-                missing_files_log = '/home/midb-ig/shared/projects/ABCD/dicom2bids/abcd-dicom2bids/temp/missing_files.txt'
+                missing_files_log = os.path.join(TMP_DIR,'missing_files_test.txt')
                 # Create the log file if it doesn't exist
                 if not os.path.exists(missing_files_log):
                     with open(missing_files_log, 'w') as log_file:
@@ -209,7 +203,7 @@ def main(argv=sys.argv):
                         full_file_path = f"{args.s3_bucket}/{split_value.strip()}"
                         print("Trying to Download",full_file_path)
                         # Check if the file exists in the S3 bucket
-                        result = subprocess.run(['s3cmd', 'ls', full_file_path, '-c', '/spaces/ngdr/workspaces/hendr522/ABCC/code/s3cfgs/msi_loris_abcd_midb_s3.s3cfg'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        result = subprocess.run(['s3cmd', 'ls', full_file_path, '-c', args.s3_config], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                         print(result.stdout.decode())
                         print(result.stderr.decode())
                         print(result.returncode)
@@ -223,7 +217,7 @@ def main(argv=sys.argv):
                             destination_dir = os.path.join(tgz_dir, second_last_dir,file_name)
                             # os.makedirs(destination_dir, exist_ok=True)  # Create the destination directory if it doesn't exist
                             try:
-                                subprocess.run(['s3cmd', 'get', full_file_path, destination_dir, '-c', '/spaces/ngdr/workspaces/hendr522/ABCC/code/s3cfgs/msi_loris_abcd_midb_s3.s3cfg'], check=True)
+                                subprocess.run(['s3cmd', 'get', full_file_path, destination_dir, '-c', args.s3_config], check=True)
                                 print(f"Downloaded: {full_file_path} to {destination_dir}")
                             except subprocess.CalledProcessError as e:
                                 # File does not exist, log the missing file
