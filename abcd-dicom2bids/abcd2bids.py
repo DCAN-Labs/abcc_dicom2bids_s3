@@ -5,13 +5,14 @@ ABCD to BIDS CLI Wrapper
 Greg Conan: conan@ohsu.edu
 Created 2019-05-29
 Updated 2020-01-15
+Updated 2024-10-15 - Tanya Pandhi
 """
 
 ##################################
 #
 # Wrapper for ABCD DICOM to BIDS pipeline that can be run from the command line
 #    1. Imports data, QC's it, and exports abcd_fastqc01_reformatted.csv
-#    2. Runs aws_downloader.py to download ABCD data using .csv table
+#    2. Runs s3_downloader_revised.py to download ABCD data using .csv table
 #    3. Runs unpack_and_setup.sh to unpack/setup the downloaded ABCD data
 #    4. Runs correct_jsons.py to conform data to official BIDS standards
 #    5. Runs BIDS validator on unpacked/setup data using Docker
@@ -47,12 +48,9 @@ except (OSError, AssertionError):
 CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".abcd2bids", "config.ini")
 CORRECT_JSONS = os.path.join(PWD, "src", "correct_jsons.py")
 DOWNLOAD_FOLDER = os.path.join(PWD, "raw")
-#NDA_AWS_TOKEN_MAKER = os.path.join(PWD, "src", "nda_aws_token_maker.py")
-NDA_AWS_TOKEN_MAKER = os.path.join(PWD, "src", "ndar_update_keys.py")
-DOWNLOAD_CMD_PATH = os.path.join(os.path.expanduser("~"), ".local", "bin", "downloadcmd")
 
 SERIES_TABLE_PARSER = os.path.join(PWD, "src", "s3_downloader_revised.py")
-SPREADSHEET_DOWNLOAD = os.path.join(PWD, "temp", "abcd_fastqc01_reformatted.csv")
+SPREADSHEET_DOWNLOAD = os.path.join(PWD, "spreadsheets", "abcd_fastqc01_reformatted.csv")
 SPREADSHEET_QC = os.path.join(PWD, "spreadsheets", "abcd_fastqc01.txt")
 TEMP_FILES_DIR = os.path.join(PWD, "temp")
 UNPACK_AND_SETUP = os.path.join(PWD, "src", "unpack_and_setup.sh")
@@ -137,16 +135,13 @@ def get_cli_args():
               "valid path to an existing folder.")
     )
 
-    # Optional: Get path to already-existing config file with NDA credentials
+    # Optional: Get path to already-existing config file with credentials for s3 bucket
     parser.add_argument(
         "-c",
-        "--config",
-        default=CONFIG_FILE,
-        help=("Path to config file with NDA credentials. If no "
-              "config file exists at this path yet, then one will be created. "
-              "Unless this option or --username and --password is added, the "
-              "user will be prompted for their NDA username and password. "
-              "By default, the config file will be located at " + CONFIG_FILE)
+        "--s3config",
+        required=True,
+        help=("Path to config file with S3 Bucket credentials. If no "
+              "config file exists at this path yet, then one will be created. ")
     )
 
     # Optional: Get download folder path from user as CLI arg
@@ -154,7 +149,7 @@ def get_cli_args():
         "-d",
         "--download",
         default=DOWNLOAD_FOLDER,
-        help=("Path to folder which NDA data will be downloaded "
+        help=("Path to folder which DICOM data will be downloaded "
               "into. By default, data will be downloaded into the {} folder. "
               "A folder will be created at the given path if one does not "
               "already exist.".format(DOWNLOAD_FOLDER))
@@ -165,7 +160,7 @@ def get_cli_args():
         "-o",
         "--output",
         default=UNPACKED_FOLDER,
-        help=("Folder path into which NDA data will be unpacked and "
+        help=("Folder path into which DICOM data will be unpacked and "
               "setup once downloaded. By default, this script will put the "
               "data into the {} folder. A folder will be created at the given "
               "path if one does not already exist.".format(UNPACKED_FOLDER))
@@ -178,26 +173,16 @@ def get_cli_args():
         type=validate_readable_file,
         default=SPREADSHEET_QC,
         help=("Path to Quality Control (QC) spreadsheet file downloaded from "
-              "the NDA. By default, this script will use {} as the QC "
+              "the LASSO. By default, this script will use {} as the QC "
               "spreadsheet.".format(SPREADSHEET_QC))
     )
     parser.add_argument(
         "-s3",
         "--s3bucket",
         type=str,
+        required=True,
         default='s3://midb-abcd-ucsd-main-pr-upload/release/bids/sourcedata',
         help=("Path to UCSD S3 bucket to download the dicoms ")
-    )
-    parser.add_argument(
-        "-p",
-        "--package_id",
-        required=True,
-        help=("ID of the data package that is created via the NDA")
-    )
-    parser.add_argument(
-        "--downloadcmd",
-        default=DOWNLOAD_CMD_PATH,
-        help=("Path to downloadcmd executable")
     )
 
     # Optional: Subject list
@@ -271,18 +256,6 @@ def get_cli_args():
               "doesn't already exist.".format(TEMP_FILES_DIR))
     )
 
-    # Optional: Get NDA username and password
-    parser.add_argument(
-        "-u",
-        "--username",
-        type=str,
-        help=("NDA username. Adding this will create a new config "
-              "file or overwrite an old one. Unless this is added or a config "
-              "file exists with the user's NDA credentials, the user will be "
-              "prompted for them. If this is added and --password is not, "
-              "then the user will be prompted for their NDA password.")
-    )
-
     parser.add_argument(
         "-z",
         "--docker-cmd",
@@ -316,12 +289,6 @@ def validate_cli_args(args, parser):
     # Validate FSL and MRE directories
     validate_dir_path(args.fsl_dir, parser)
     validate_dir_path(args.mre_dir, parser)
-
-    # Validate and create config file's parent directory
-    try:
-        os.makedirs(os.path.dirname(args.config), exist_ok=True)
-    except (OSError, TypeError):
-        parser.error("Could not create folder to contain config file.")
 
     # Validate other dirs: check if they exist; if not, try to create them; and
     # move important files in the default dir(s) to the new dir(s)
@@ -448,107 +415,6 @@ def cleanup(temp_dir, exit_code):
     sys.exit(exit_code)
 
 
-def make_nda_token(args):
-    """
-    Create NDA token by getting credentials from config file. If no config file
-    exists yet, or user specified to make a new one by entering their NDA
-    credentials as CLI args, then create one to store NDA credentials.
-    :param args: argparse namespace containing all CLI arguments. The specific
-    arguments used by this function are --username, --password, and --config.
-    :return: N/A
-    """
-    # If config file with NDA credentials exists, then get credentials from it,
-    # unless user entered other credentials to make a new config file
-    if not args.username and os.path.exists(args.config):
-        username, password = get_nda_credentials_from(args.config)
-
-    # Otherwise get NDA credentials from user & save them in a new config file,
-    # overwriting the existing config file if user gave credentials as cli args
-    else:
-
-        # If NDA username was a CLI arg, use it; otherwise prompt user for it
-        if args.username:
-            username = args.username
-        else:
-            username = input("\nEnter your NIMH Data Archives username: ")
-
-        # If NDA password was a CLI arg, use it; otherwise prompt user for it
-        password = getpass("Enter your NIMH Data Archives password: ")
-            
-        make_config_file(args.config, username, password)
-
-    # Try to make NDA token
-    token_call_exit_code = subprocess.call((
-        "python3",
-        NDA_AWS_TOKEN_MAKER,
-        "--username", username,
-        "--password", password,
-        "--config-dir", args.temp
-    ))
-
-    # If NDA credentials are invalid, tell user so without printing password.
-    # Manually catch error instead of using try-except to avoid trying to
-    # catch another file's exception.
-    if token_call_exit_code != 0:
-        print("Failed to create NDA token using the username and decrypted "
-              "password from {}.".format(os.path.abspath(args.config)))
-        sys.exit(1)
-
-
-def get_nda_credentials_from(config_file_path):
-    """
-    Given the path to a config file, returns user's NDA credentials.
-    :param config_file_path: Path to file containing user's NDA username,
-    encrypted form of user's NDA password, and key to that encryption.
-    :return: Two variables: user's NDA username and password.
-    """
-    # Object to read/write config file containing NDA credentials
-    config = configparser.ConfigParser()
-    config.read(config_file_path)
-
-    # Get encrypted password and encryption key from config file
-    encryption_key = config["NDA"]["key"]
-    encrypted_password = config["NDA"]["encrypted_password"]
-
-    # Decrypt password to get user's NDA credentials
-    username = config["NDA"]["username"]
-    password = (
-        Fernet(encryption_key.encode("UTF-8"))
-        .decrypt(token=encrypted_password.encode("UTF-8"))
-        .decode("UTF-8")
-    )
-
-    return username, password
-
-
-def make_config_file(config_filepath, username, password):
-    """
-    Create a config file to save user's NDA credentials.
-    :param config_filepath: Name and path of config file to create.
-    :param username: User's NDA username to save in config file.
-    :param password: User's NDA password to encrypt then save in config file.
-    :return: N/A
-    """
-    # Object to read/write config file containing NDA credentials
-    config = configparser.ConfigParser()
-
-    # Encrypt user's NDA password by making an encryption key
-    encryption_key = Fernet.generate_key()
-    encrypted_pass = Fernet(encryption_key).encrypt(password.encode("UTF-8"))
-
-    # Save the encryption key and encrypted password to a new config file
-    config["NDA"] = {
-        "username": username,
-        "encrypted_password": encrypted_pass.decode("UTF-8"),
-        "key": encryption_key.decode("UTF-8")
-    }
-    with open(config_filepath, "w") as configfile:
-        config.write(configfile)
-
-    # Change permissions of the config file to prevent other users accessing it
-    subprocess.check_call(("chmod", "700", config_filepath))
-
-
 def reformat_fastqc_spreadsheet(cli_args):
     """
     Create abcd_fastqc01_reformatted.csv by reformatting the original fastqc01.txt spreadsheet.
@@ -571,7 +437,7 @@ def reformat_fastqc_spreadsheet(cli_args):
     # )
     ##############################################################
 
-    ################## added for new fasttrackqc - tanya ###############
+    ################## added for new fasttrackqc - tanya pandhi ###############
     all_qc_data = all_qc_data.applymap(lambda x: x.strip('"') if isinstance(x, str) else x)
     all_qc_data = all_qc_data.applymap(lambda x: int(x) if isinstance(x, str) and x.isnumeric() else x)
     
@@ -674,47 +540,6 @@ def reformat_fastqc_spreadsheet(cli_args):
     reformatted_data.to_csv(SPREADSHEET_DOWNLOAD, index=False)
     print(f'Reformatted data saved to {SPREADSHEET_DOWNLOAD}')
 
-    # # Select QC data that is usable (ftq_usable==1) and complete (ftq_complete==1)
-    # qc_data = fix_split_col(all_qc_data.loc[(all_qc_data['ftq_usable'] == 1) & (all_qc_data['ftq_complete'] == 1)])
-
-    # def get_img_desc(row):
-    #     """
-    #     :param row: pandas.Series with a column called "ftq_series_id"
-    #     :return: String with the image_description of that row
-    #     """
-    #     return row.ftq_series_id.split("_")[2]
-
-    # # Add extra column by splitting data from other column
-    # image_desc_col = qc_data.apply(get_img_desc, axis=1)
-    # qc_data = qc_data.assign(**{'image_description': image_desc_col.values})
-
-    # def get_img_timestamp(row):
-    #     """
-    #     :param row: pandas.Series with a column called "ftq_series_id"
-    #     :return: String with the image_description of that row
-    #     """
-    #     return row.ftq_series_id.split("_")[3]
-
-    # # Add extra column by splitting data from other column
-    # image_timestamp_col = qc_data.apply(get_img_timestamp, axis=1)
-    # qc_data = qc_data.assign(**{'image_timestamp': image_timestamp_col.values})
-
-    # # remove "Replaced" rows from download list
-    # qc_data = qc_data[qc_data['ftq_recall_reason'] != 'Replaced']
-
-
-    # # Change column names for good_bad_series_parser to use; then save to .csv
-    # qc_data.rename({
-    #     "ftq_usable": "QC", "subjectkey": "pGUID", "visit": "EventName",
-    #     "abcd_compliant": "ABCD_Compliant", "interview_age": "SeriesTime",
-    #     "comments_misc": "SeriesDescription", "file_source": "image_file"
-    # }, axis="columns").sort_values([
-    #     'pGUID',
-    #     'EventName',
-    #     'image_description',
-    #     'image_timestamp'
-    # ]).to_csv(SPREADSHEET_DOWNLOAD, index=False)
-
 
 def fix_split_col(qc_df):
     """
@@ -747,28 +572,6 @@ def fix_split_col(qc_df):
         last_col = columns[-1]
     return qc_df
 
-
-def download_nda_data(cli_args):
-    """
-    Call Python script to download NDA data by making NDA token and parsing the
-    good_and_bad_series_table.csv spreadsheet.
-    :param cli_args: argparse namespace containing all CLI arguments. This
-    function only uses the --download argument, the path to the folder to fill
-    with downloaded NDA data.
-    :return: N/A
-    """
-    subprocess.check_call(("python3", "--version"))
-    print(cli_args.modalities)
-    subprocess.check_call(("python3", 
-                            SERIES_TABLE_PARSER,
-                            "--qc-csv", os.path.join(cli_args.temp, os.path.basename(SPREADSHEET_DOWNLOAD)),
-                            "--download-dir", cli_args.download, 
-                            "--subject-list", cli_args.subject_list,
-                            "--sessions", ','.join(cli_args.sessions),
-                            "--modalities", ','.join(cli_args.modalities),
-                            "--downloadcmd", cli_args.downloadcmd,
-                            "--package-id", cli_args.package_id))
-
 def download_s3_data(cli_args):
     """
     Call Python script to download s3 data parsing the
@@ -782,12 +585,13 @@ def download_s3_data(cli_args):
     print(cli_args.modalities)
     subprocess.check_call(("python3", 
                             SERIES_TABLE_PARSER,
-                            "--qc-csv", os.path.join(cli_args.temp, os.path.basename(SPREADSHEET_DOWNLOAD)),
+                            "--qc-csv", SPREADSHEET_DOWNLOAD,
                             "--download-dir", cli_args.download, 
                             "--subject-list", cli_args.subject_list,
                             "--sessions", ','.join(cli_args.sessions),
                             "--modalities", ','.join(cli_args.modalities),
-                            "--s3-bucket", cli_args.s3bucket))
+                            "--s3-bucket", cli_args.s3bucket,
+                            "--s3-config", cli_args.s3config))
 
 
 def unpack_and_setup(args):
@@ -859,35 +663,6 @@ def unpack_and_setup(args):
                             break
                     if exit_modality_loop:
                         break  # Exit modality loop
-
-                # tgz_dir = os.path.join(session_dir.path, 'image03')
-                # for tgz in os.scandir(tgz_dir):
-                #     if tgz:
-                #         # Get session ID from some (arbitrary) .tgz file in
-                #         # session folder
-                #         session_name = tgz.name.split("_")[1]
-                #         print('Unpacking and setting up tgzs for {} {} located here: {}'.format(subject, session_name, tgz_dir))
-                #         print("Running: ", UNPACK_AND_SETUP, subject, "ses-" + session_name, session_dir.path, args.output, args.temp, args.fsl_dir, args.mre_dir)
-
-                #         # Unpack/setup the data for this subject/session
-                #         subprocess.check_call((
-                #             UNPACK_AND_SETUP,
-                #             subject,
-                #             "ses-" + session_name,
-                #             session_dir.path,
-                #             args.output,
-                #             args.temp,
-                #             args.fsl_dir,
-                #             args.mre_dir
-                #         ))
-
-                #         # If user said to, delete all the raw downloaded
-                #         # files for each subject after that subject's data
-                #         # has been converted and copied
-                #         if args.remove:
-                #             shutil.rmtree(os.path.join(args.download,
-                #                                        subject))
-                #         break
 
 
 def correct_jsons(cli_args):
