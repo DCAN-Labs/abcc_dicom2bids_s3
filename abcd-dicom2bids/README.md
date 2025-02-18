@@ -245,10 +245,9 @@ The resulting ABCD Study dataset here is made up of all the ABCD Study participa
 This wrapper relies on the following other projects:
 - [cbedetti Dcm2Bids](https://github.com/cbedetti/Dcm2Bids)
 - [Rorden Lab dcm2niix](https://github.com/rordenlab/dcm2niix)
-- [zlib's pigz-2.4](https://zlib.net/pigz)
 - [Official BIDS validator](https://github.com/bids-standard/bids-validator) 
 
 
 ## Meta
 
-Documentation last updated by Jacob Lundquist on 2023-01-05.
+Documentation last updated by Tanya Pandhi on 2025-02-18.
