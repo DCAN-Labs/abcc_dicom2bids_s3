@@ -15,7 +15,6 @@ Clone this repository, install the dependencies listed below ***and*** the requi
 1. [cbedetti Dcm2Bids version 2.1.4](https://github.com/cbedetti/Dcm2Bids) (`export` into your BASH `PATH` variable) (WARNING: versions >=3.0.0 are not compatible with code written for previous versions)
 1. [Rorden Lab dcm2niix version v1.0.20201102](https://github.com/rordenlab/dcm2niix) (`export` into your BASH `PATH` variable) (WARNING: older versions of dcm2niix have failed to properly convert DICOMs)
 1. [dcmdump version 3.6.5 or higher](https://dicom.offis.de/dcmtk.php.en) (`export` into your BASH `PATH` variable)
-1. [zlib's pigz-2.4](https://zlib.net/pigz) (`export` into your BASH `PATH` variable)
 1. Singularity or Docker (see documentation for [Docker Community Edition for Ubuntu](https://docs.docker.com/install/linux/docker-ce/ubuntu/))
 1. [FMRIB Software Library (FSL) v5.0](https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/FslInstallation)
 
@@ -246,10 +245,9 @@ The resulting ABCD Study dataset here is made up of all the ABCD Study participa
 This wrapper relies on the following other projects:
 - [cbedetti Dcm2Bids](https://github.com/cbedetti/Dcm2Bids)
 - [Rorden Lab dcm2niix](https://github.com/rordenlab/dcm2niix)
-- [zlib's pigz-2.4](https://zlib.net/pigz)
 - [Official BIDS validator](https://github.com/bids-standard/bids-validator) 
 
 
 ## Meta
 
-Documentation last updated by Jacob Lundquist on 2023-01-05.
+Documentation last updated by Tanya Pandhi on 2025-02-18.
